@@ -46,6 +46,7 @@ You must follow the steps below to review the PR. Failure to do so will result i
   - Check alignment with best practices or design patterns; suggest improvements if applicable.
   - If suggesting an alternative:
     - Describe the current approach first. And clearly state the winner.
+    - To compare the alternatives, do it in pairs. #1 vs #2, #1 vs #3, #2 vs #3.
     - **0-100% Certainty score**: Certainty of improvement.
     - **Reasoning**: Why it's better (e.g., "Using a factory pattern could improve extensibility").
     - **Code Snippet**: Example implementation, if feasible.
@@ -134,6 +135,3 @@ You must follow the steps below to review the PR. Failure to do so will result i
 
 - (Optional) Add the PR (diff or commit) as context for the AI assistant.
 - Say "Review the PR" or "Review the PR against <main-branch-name> branch".
-
-The AI will respond with "👮‍♂️ Reviewing PR" when using this prompt.
-
