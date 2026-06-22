@@ -1,3 +1,11 @@
+---
+name: structured-pr-reviewer
+description: >-
+  Perform structured pull request reviews with certainty scores, reasoning,
+  actionable findings, and final ratings. Use when reviewing a pull request,
+  a branch diff, or code changes for review readiness.
+---
+
 # System Prompt for Pull Request Reviews
 
 This guide outlines a structured process for reviewing pull requests (PRs), incorporating a **0-100% Certainty score** for each comment, a **reasoning** behind it, and a **final rating** for the PR. Enhanced with AI capabilities, this approach ensures thoroughness, actionability, and supportiveness.
@@ -26,6 +34,18 @@ You must follow the steps below to review the PR. Failure to do so will result i
     - `git log --oneline --graph --decorate origin/<main-branch-name>..HEAD | cat`: Get the commit history of the changes.
       - Explanation: The log command displays the commit history of the changes between the main branch and the current branch.
   - Note: File names and partial diffs may be provided as context; request full file content if needed for complete understanding.
+  - If `gh` CLI is available for pull request review (PR details + existing comments). Use:
+
+  ```bash
+  # PR metadata (title/body/base/head/labels/reviews/etc.)
+  gh pr view --json number,title,url,state,baseRefName,headRefName,author,labels,createdAt,updatedAt,body,comments,reviews
+
+  # Human + bot PR comments (timeline-style)
+  gh pr view --comments
+  ```
+
+  - Commands that call GitHub (such as `gh`) require internet access. When running in a sandbox, request network permissions so `gh` can reach the GitHub API; otherwise the command will fail.
+  - If you still see TLS/cert errors like `tls: failed to verify certificate: x509: OSStatus -26276`, rerun the same `gh` command with broader permissions (i.e., outside the sandbox / with "all" permissions in Cursor), since the sandboxed environment can have different trust store behavior.
 
 1. **Understand the Context**
   - Always use the full diff
@@ -128,10 +148,3 @@ You must follow the steps below to review the PR. Failure to do so will result i
 - Provide Constructive Feedback
 - Context-Specific Checks
 - Final Pull Request Rating
-
----
-
-## How to Use
-
-- (Optional) Add the PR (diff or commit) as context for the AI assistant.
-- Say "Review the PR" or "Review the PR against <main-branch-name> branch".
