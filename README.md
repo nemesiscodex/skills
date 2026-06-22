@@ -32,8 +32,8 @@ The `skills` CLI discovers skill directories containing a `SKILL.md` file with
 
 ### [Structured PR Reviewer](skills/structured-pr-reviewer/)
 
-Conduct a thorough pull request review with certainty scores, reasoning,
-focused findings, and quality ratings.
+Certainty-scored pull request reviews with reasoning, findings, and final
+ratings.
 
 Use it by asking an installed agent to review a pull request or branch diff.
 
