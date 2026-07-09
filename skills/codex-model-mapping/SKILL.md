@@ -1,6 +1,7 @@
 ---
 name: codex-model-mapping
 description: Map generic delegation capability floors to Codex CLI models, reasoning effort, sandboxes, and acceptance gates. Use with delegator or delegator-codex when delegation should run through Codex.
+disable-model-invocation: true
 ---
 
 # Codex Model Mapping

@@ -18,6 +18,8 @@ npx skills add nemesiscodex/prompts --skill use-codex --agent codex
 npx skills add nemesiscodex/prompts --skill delegator --agent codex
 npx skills add nemesiscodex/prompts --skill codex-model-mapping --agent codex
 npx skills add nemesiscodex/prompts --skill delegator-codex --agent codex
+npx skills add nemesiscodex/prompts --skill cursor-model-mapping --agent cursor
+npx skills add nemesiscodex/prompts --skill delegator-cursor --agent cursor
 npx skills add nemesiscodex/prompts --skill structured-pr-reviewer --agent codex
 ```
 
@@ -64,6 +66,21 @@ Maps the generic delegation floors to Codex CLI model, reasoning effort,
 sandbox, and acceptance gates. Use it directly with `delegator` or through
 `delegator-codex`.
 
+### [Delegator Cursor](skills/delegator-cursor/)
+
+Thin Cursor-specific wrapper around the generic delegator workflow. It loads
+the generic delegator skill plus a Cursor model mapping for `Scout`,
+`Builder`, `Senior`, and `You`.
+
+Install it together with `delegator` and `cursor-model-mapping`, or install
+all skills from the repository.
+
+### [Cursor Model Mapping](skills/cursor-model-mapping/)
+
+Maps the generic delegation floors to Cursor models, reasoning effort, and
+acceptance gates. Use it directly with `delegator` or through
+`delegator-cursor`.
+
 ### [Structured PR Reviewer](skills/structured-pr-reviewer/)
 
 Provides a certainty-scored pull request review workflow with diff gathering,
@@ -77,14 +94,14 @@ Use it by asking an installed agent to review a pull request or branch diff.
 ```text
 skills/
   codex-model-mapping/
-    agents/
-      openai.yaml
+    SKILL.md
+  cursor-model-mapping/
     SKILL.md
   delegator/
     SKILL.md
   delegator-codex/
-    agents/
-      openai.yaml
+    SKILL.md
+  delegator-cursor/
     SKILL.md
   structured-pr-reviewer/
     GATHER.md
