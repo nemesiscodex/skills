@@ -91,7 +91,7 @@ If the host has named subagents or models, create a local map from **Scout**, **
 
 Adapter rule:
 
-- **Scout**: read-only exploration, inventory, summarization, log reduction
+- **Scout**: exploration, inventory, summarization, log reduction; may write findings to scratch, not application code
 - **Builder**: can edit in scope, run targeted checks, and return patch notes
 - **Senior**: stronger reasoning for hard refactors, correctness, security, or failed Builder work
 - **You**: no delegatee; parent judgment only
