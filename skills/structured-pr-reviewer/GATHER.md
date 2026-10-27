@@ -1,16 +1,11 @@
-# Gather PR changes
+# Gather a local branch
 
-Use when git MCP is unavailable. Replace `<base-branch>` with the branch name the user provides.
-
-## Git commands
+For a PR URL, use `scripts/gather-pr` instead. Replace `<base-branch>` with the branch name the user provides.
 
 Use three dots (`...`) for `diff` — compares against the merge base, not the tip of the base branch.
 Use two dots (`..`) for `log` — lists commits on the current branch not in the base branch.
 
 ```bash
-# Current branch (if needed)
-git rev-parse --abbrev-ref HEAD | cat
-
 # Default branch from remote (skip if user provided base branch)
 git remote show origin | grep 'HEAD' | cat
 
@@ -27,17 +22,4 @@ git diff origin/<base-branch>...HEAD -- <filepath> | cat
 git log --oneline --graph --decorate origin/<base-branch>..HEAD | cat
 ```
 
-## GitHub CLI
-
-When reviewing an open PR and `gh` is available:
-
-```bash
-# PR metadata (title/body/base/head/labels/reviews/etc.)
-gh pr view --json number,title,url,state,baseRefName,headRefName,author,labels,createdAt,updatedAt,body,comments,reviews
-
-# Human + bot PR comments (timeline-style)
-gh pr view --comments
-```
-
-`gh` requires network access. In a sandbox, request network permissions.
-On TLS/cert errors (e.g. `x509: OSStatus -26276`), rerun with broader permissions (outside the sandbox).
+`gh` and `git fetch` need network access. On TLS/cert errors in a sandbox (e.g. `x509: OSStatus -26276`), rerun outside the sandbox.

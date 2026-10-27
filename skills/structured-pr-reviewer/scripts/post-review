@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Validate and post a drafted PR review.
+
+Usage:
+  post-review <pr-url> [drafts.json] --dry-run   check the file and every line anchor; post nothing
+  post-review <pr-url> [drafts.json]             check, post as one review, read the anchors back
+
+drafts.json defaults to /tmp/pr-review/<repo>-<number>.review.json and uses the
+GitHub "create a review" request body:
+
+  {"commit_id": "<PR head sha>", "event": "COMMENT" | "APPROVE" | "REQUEST_CHANGES",
+   "body": "summary",
+   "comments": [{"path": "src/a.ts", "line": 42, "body": "..."},
+                {"path": "src/b.ts", "start_line": 10, "line": 14, "body": "..."}]}
+
+Comment keys: path, line, body; optional start_line, side / start_side (RIGHT
+default, LEFT for a deleted line). Refuses to post when the PR head moved past
+commit_id (pass --allow-stale to post anyway, without the anchor check) or when
+any anchor is outside the diff.
+"""
+
+import json
+import re
+import subprocess
+import sys
+
+TOP_KEYS = {"commit_id", "event", "body", "comments"}
+COMMENT_KEYS = {"path", "line", "body", "side", "start_line", "start_side"}
+EVENTS = {"COMMENT", "APPROVE", "REQUEST_CHANGES"}
+HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def run(cmd):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"error: {' '.join(cmd)}\n{r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout
+
+
+def gh_pages(path):
+    pages = json.loads(run(["gh", "api", path, "--paginate", "--slurp"]))
+    return [item for page in pages for item in page]
+
+
+def diff_lines(patch):
+    """Return the RIGHT and LEFT line numbers a review comment may anchor to."""
+    right, left = set(), set()
+    old = new = 0
+    for line in patch.splitlines():
+        m = HUNK.match(line)
+        if m:
+            old, new = int(m.group(1)), int(m.group(2))
+        elif line.startswith("+"):
+            right.add(new)
+            new += 1
+        elif line.startswith("-"):
+            left.add(old)
+            old += 1
+        elif line.startswith(" "):
+            right.add(new)
+            left.add(old)
+            old += 1
+            new += 1
+    return {"RIGHT": right, "LEFT": left}
+
+
+def validate_shape(review):
+    errors = [f"unknown top-level key: {k}" for k in review.keys() - TOP_KEYS]
+    for key in ("commit_id", "event", "body"):
+        if not isinstance(review.get(key), str) or not review.get(key):
+            errors.append(f"missing or empty: {key}")
+    if review.get("event") not in EVENTS:
+        errors.append(f"event must be one of {sorted(EVENTS)}")
+    for i, c in enumerate(review.get("comments", [])):
+        where = f"comments[{i}]"
+        errors += [f"{where}: unknown key {k}" for k in c.keys() - COMMENT_KEYS]
+        if not isinstance(c.get("path"), str) or not isinstance(c.get("body"), str) or not c.get("body"):
+            errors.append(f"{where}: needs path and a non-empty body")
+        if not isinstance(c.get("line"), int):
+            errors.append(f"{where}: line must be an integer")
+        if "start_line" in c and not (isinstance(c["start_line"], int) and c["start_line"] < c.get("line", 0)):
+            errors.append(f"{where}: start_line must be an integer below line")
+    return errors
+
+
+def check_anchors(owner, repo, number, comments):
+    files = {f["filename"]: f.get("patch") for f in gh_pages(f"repos/{owner}/{repo}/pulls/{number}/files?per_page=100")}
+    allowed = {path: diff_lines(patch) for path, patch in files.items() if patch}
+    bad = 0
+    for c in comments:
+        side = c.get("side", "RIGHT")
+        span = f"{c['start_line']}-{c['line']}" if "start_line" in c else str(c["line"])
+        label = f"{c['path']}:{span}{' (LEFT)' if side == 'LEFT' else ''}"
+        if c["path"] not in files:
+            print(f"  BAD  {label}  file is not in the PR")
+            bad += 1
+        elif c["path"] not in allowed:
+            print(f"  ??   {label}  no patch from the API (binary or too large); GitHub decides")
+        elif c["line"] not in allowed[c["path"]][side] or (
+                "start_line" in c and c["start_line"] not in allowed[c["path"]][c.get("start_side", side)]):
+            print(f"  BAD  {label}  line is outside the diff hunks")
+            bad += 1
+        else:
+            print(f"  ok   {label}")
+    return bad
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    if not args or "--help" in flags:
+        sys.exit(__doc__)
+    m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", args[0])
+    if not m:
+        sys.exit(f"error: not a GitHub PR URL: {args[0]}")
+    owner, repo, number = m.group(1), m.group(2), int(m.group(3))
+    path = args[1] if len(args) > 1 else f"/tmp/pr-review/{repo}-{number}.review.json"
+
+    with open(path) as fh:
+        review = json.load(fh)
+    errors = validate_shape(review)
+    if errors:
+        sys.exit("invalid drafts file:\n  " + "\n  ".join(errors))
+    comments = review.get("comments", [])
+
+    # REST only: Claude Code cloud sessions reject GitHub GraphQL, which `gh pr` uses.
+    pr = json.loads(run(["gh", "api", f"repos/{owner}/{repo}/pulls/{number}"]))
+    print(f"{owner}/{repo}#{number}  event {review['event']}  {len(comments)} inline comments  file {path}")
+    print(f"summary: {review['body'].splitlines()[0][:160]}")
+    if pr["state"] != "open":
+        sys.exit(f"error: PR is {pr['state']}")
+    stale = pr["head"]["sha"] != review["commit_id"]
+    if stale:
+        msg = (f"PR head moved: drafts are on {review['commit_id'][:10]}, PR is at {pr['head']['sha'][:10]}. "
+               "Re-run gather-pr, recheck the findings, and update commit_id.")
+        if "--allow-stale" not in flags:
+            sys.exit(f"error: {msg}")
+        print(f"warning: {msg} Posting on the old commit; anchors not checked.")
+    else:
+        if check_anchors(owner, repo, number, comments):
+            sys.exit("error: fix the BAD anchors above; nothing was posted")
+
+    if "--dry-run" in flags:
+        print("dry run: valid, nothing posted")
+        return
+
+    posted = json.loads(run(["gh", "api", "-X", "POST", f"repos/{owner}/{repo}/pulls/{number}/reviews", "--input", path]))
+    print(f"posted review {posted['id']} state {posted['state']}\n{posted['html_url']}")
+    # The per-review comments endpoint omits line numbers; the PR-wide one keeps original_line.
+    landed = [c for c in gh_pages(f"repos/{owner}/{repo}/pulls/{number}/comments?per_page=100")
+              if c.get("pull_request_review_id") == posted["id"]]
+    want = sorted((c["path"], c["line"]) for c in comments)
+    got = sorted((c["path"], c.get("original_line")) for c in landed)
+    for c in landed:
+        print(f"  {c['path']}:{c.get('original_line')}  {c['html_url']}")
+    if want != got:
+        sys.exit(f"warning: anchors differ from the drafts\n  wanted {want}\n  landed {got}")
+
+
+if __name__ == "__main__":
+    main()

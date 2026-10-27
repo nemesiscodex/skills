@@ -14,12 +14,6 @@ npx skills add nemesiscodex/prompts
 Install a single skill:
 
 ```bash
-npx skills add nemesiscodex/prompts --skill use-codex --agent codex
-npx skills add nemesiscodex/prompts --skill delegator --agent codex
-npx skills add nemesiscodex/prompts --skill codex-model-mapping --agent codex
-npx skills add nemesiscodex/prompts --skill delegator-codex --agent codex
-npx skills add nemesiscodex/prompts --skill cursor-model-mapping --agent cursor
-npx skills add nemesiscodex/prompts --skill delegator-cursor --agent cursor
 npx skills add nemesiscodex/prompts --skill structured-pr-reviewer --agent codex
 ```
 
@@ -35,79 +29,28 @@ The `skills` CLI discovers skill directories containing a `SKILL.md` file with
 
 ## Skills
 
-### [Use Codex](skills/use-codex/)
-
-Cursor-oriented workflow for running the Codex CLI as a synchronous subagent
-with GPT-5.5 at low or medium reasoning effort. Use it when Cursor should hand
-off a bounded prompt to Codex, wait for stdout, then summarize the result.
-
-### [Delegator](skills/delegator/)
-
-Defines a parent-only orchestration workflow for decomposing work, routing
-slices by capability floor, keeping delegatee output in scratch files, and
-preserving final judgment in the parent agent. Host-specific model names belong
-in local adapters, not in the core skill.
-
-This skill expects scratch output to live under `.run-result/`, which is
-ignored by this repository.
-
-### [Delegator Codex](skills/delegator-codex/)
-
-Thin Codex-specific wrapper around the generic delegator workflow. It loads the
-generic delegator skill plus a Codex model mapping for `Scout`, `Builder`,
-`Senior`, and `You`.
-
-Install it together with `delegator` and `codex-model-mapping`, or install all
-skills from the repository.
-
-### [Codex Model Mapping](skills/codex-model-mapping/)
-
-Maps the generic delegation floors to Codex CLI model, reasoning effort,
-sandbox, and acceptance gates. Use it directly with `delegator` or through
-`delegator-codex`.
-
-### [Delegator Cursor](skills/delegator-cursor/)
-
-Thin Cursor-specific wrapper around the generic delegator workflow. It loads
-the generic delegator skill plus a Cursor model mapping for `Scout`,
-`Builder`, `Senior`, and `You`.
-
-Install it together with `delegator` and `cursor-model-mapping`, or install
-all skills from the repository.
-
-### [Cursor Model Mapping](skills/cursor-model-mapping/)
-
-Maps the generic delegation floors to Cursor models, reasoning effort, and
-acceptance gates. Use it directly with `delegator` or through
-`delegator-cursor`.
-
 ### [Structured PR Reviewer](skills/structured-pr-reviewer/)
 
 Provides a certainty-scored pull request review workflow with diff gathering,
 context reconstruction, finding format, testing coverage checks, and final
 ratings.
 
-Use it by asking an installed agent to review a pull request or branch diff.
+Give it a PR URL or a base branch. For a PR URL, `scripts/gather-pr` collects
+metadata, files, commits, existing reviews, CI checks, and a worktree at the PR
+head in one call. Findings are saved as drafts, and `scripts/post-review`
+validates every line anchor before posting, only after you confirm. The scripts
+need Python 3, `git`, and an authenticated `gh` CLI.
 
 ## Repository Layout
 
 ```text
 skills/
-  codex-model-mapping/
-    SKILL.md
-  cursor-model-mapping/
-    SKILL.md
-  delegator/
-    SKILL.md
-  delegator-codex/
-    SKILL.md
-  delegator-cursor/
-    SKILL.md
   structured-pr-reviewer/
     GATHER.md
     SKILL.md
-  use-codex/
-    SKILL.md
+    scripts/
+      gather-pr
+      post-review
 ```
 
 Each skill is self-contained in its directory. Add supporting files next to

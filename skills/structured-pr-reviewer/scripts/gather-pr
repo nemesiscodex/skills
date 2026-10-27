@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Gather everything a PR review needs in one call.
+
+Usage:
+  gather-pr <pr-url> [--repo <local-clone>]   print PR facts and check out the head
+  gather-pr <pr-url> --cleanup [--repo ...]   remove the review worktree and fetched ref
+
+Prints PR metadata, files, commits, existing reviews and comments (one line
+each), CI checks, and the paths of a detached worktree at the PR head and of the
+drafts file used by post-review. Safe to re-run: a second run moves the
+worktree to the PR's new head (use it to re-review after new commits).
+
+Local clone lookup: --repo, else the current git repo if its remote matches,
+else $PR_REVIEW_REPOS/<repo> (default ~/Abra/repos/<repo>).
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+ROOT = "/tmp/pr-review"
+SPLIT_THRESHOLD = 800
+LOCKFILES = re.compile(r"(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|go\.sum)$")
+
+
+def run(cmd, cwd=None, check=True):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        sys.exit(f"error: {' '.join(cmd)}\n{r.stderr.strip()}")
+    return r
+
+
+def gh_json(args):
+    return json.loads(run(["gh", *args]).stdout)
+
+
+def gh_pages(path):
+    pages = gh_json(["api", path, "--paginate", "--slurp"])
+    return [item for page in pages for item in page]
+
+
+def one_line(text, limit=240):
+    text = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
+    text = " ".join(re.sub(r"<[^>]+>", " ", text).split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def parse_url(url):
+    m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
+    if not m:
+        sys.exit(f"error: not a GitHub PR URL: {url}")
+    return m.group(1), m.group(2), int(m.group(3))
+
+
+def matching_remote(path, owner, repo):
+    r = run(["git", "-C", path, "remote", "-v"], check=False)
+    if r.returncode != 0:
+        return None
+    want = f"{owner}/{repo}".lower()
+    for line in r.stdout.splitlines():
+        name, url = line.split()[:2]
+        if url.lower().removesuffix(".git").endswith(want):
+            return name
+    return None
+
+
+def find_clone(owner, repo, explicit):
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+    top = run(["git", "rev-parse", "--show-toplevel"], check=False)
+    if top.returncode == 0:
+        candidates.append(top.stdout.strip())
+    base = os.environ.get("PR_REVIEW_REPOS", os.path.expanduser("~/Abra/repos"))
+    candidates.append(os.path.join(base, repo))
+    for path in candidates:
+        remote = matching_remote(path, owner, repo)
+        if remote:
+            return path, remote
+    if explicit:
+        sys.exit(f"error: {explicit} has no remote for {owner}/{repo}")
+    return None, None
+
+
+def is_worktree(clone, path):
+    out = run(["git", "-C", clone, "worktree", "list", "--porcelain"]).stdout
+    real = os.path.realpath(path)
+    return any(os.path.realpath(l[len("worktree "):]) == real for l in out.splitlines() if l.startswith("worktree "))
+
+
+def checkout(clone, remote, base, number, head_sha, worktree):
+    pr_ref = f"refs/remotes/{remote}/pr-{number}"
+    run(["git", "-C", clone, "fetch", "-q", remote,
+         f"+refs/heads/{base}:refs/remotes/{remote}/{base}",
+         f"+refs/pull/{number}/head:{pr_ref}"])
+    fetched = run(["git", "-C", clone, "rev-parse", pr_ref]).stdout.strip()
+    if fetched != head_sha:
+        print(f"warning: fetched head {fetched[:10]} differs from GitHub head {head_sha[:10]} (push in progress?)")
+    run(["git", "-C", clone, "worktree", "prune"])
+    if os.path.exists(worktree):
+        if not is_worktree(clone, worktree):
+            sys.exit(f"error: {worktree} exists and is not a worktree of {clone}")
+        run(["git", "-C", worktree, "checkout", "-q", "--detach", "-f", fetched])
+        run(["git", "-C", worktree, "clean", "-fdq"])
+    else:
+        os.makedirs(ROOT, exist_ok=True)
+        run(["git", "-C", clone, "worktree", "add", "-q", "--detach", worktree, fetched])
+    merge_base = run(["git", "-C", clone, "merge-base", f"{remote}/{base}", fetched]).stdout.strip()
+    return fetched, merge_base
+
+
+def cleanup(clone, remote, number, worktree):
+    if os.path.exists(worktree) and is_worktree(clone, worktree):
+        run(["git", "-C", clone, "worktree", "remove", "--force", worktree])
+        print(f"removed worktree {worktree}")
+    ref = f"refs/remotes/{remote}/pr-{number}"
+    if run(["git", "-C", clone, "show-ref", "-q", "--verify", ref], check=False).returncode == 0:
+        run(["git", "-C", clone, "update-ref", "-d", ref])
+        print(f"deleted {ref}")
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        sys.exit(__doc__)
+    url = args[0]
+    explicit = args[args.index("--repo") + 1] if "--repo" in args else None
+    owner, repo, number = parse_url(url)
+    worktree = f"{ROOT}/{repo}-{number}"
+    drafts = f"{ROOT}/{repo}-{number}.review.json"
+    clone, remote = find_clone(owner, repo, explicit)
+
+    if "--cleanup" in args:
+        if not clone:
+            sys.exit(f"error: no local clone of {owner}/{repo}; pass --repo <path>")
+        cleanup(clone, remote, number, worktree)
+        return
+
+    # REST only: Claude Code cloud sessions reject GitHub GraphQL, which `gh pr` uses.
+    pr = gh_json(["api", f"repos/{owner}/{repo}/pulls/{number}"])
+    files = gh_pages(f"repos/{owner}/{repo}/pulls/{number}/files?per_page=100")
+    base, head = pr["base"]["ref"], pr["head"]["sha"]
+    requested = [u["login"] for u in pr["requested_reviewers"]] + [f"team:{t['slug']}" for t in pr["requested_teams"]]
+
+    print(f"## PR {owner}/{repo}#{number}: {pr['title']}")
+    print(f"author {pr['user']['login']} | {pr['state']}{' draft' if pr['draft'] else ''} | "
+          f"mergeable {pr['mergeable']} ({pr['mergeable_state']})")
+    print(f"base {base} <- head {pr['head']['ref']} @ {head}")
+    print(f"requested reviewers {', '.join(requested) or 'none'}")
+
+    body = (pr["body"] or "").strip()
+    print("\n## Body")
+    print(body[:4000] + (f"\n…[body truncated, {len(body)} chars]" if len(body) > 4000 else "") if body else "(empty)")
+
+    reviewable = sum(f["changes"] for f in files if not LOCKFILES.search(f["filename"]))
+    print(f"\n## Files ({len(files)} files, +{pr['additions']} -{pr['deletions']}; "
+          f"{reviewable} changed lines excluding lockfiles)")
+    for f in sorted(files, key=lambda f: -f["changes"]):
+        note = "" if f.get("patch") else "  [no patch from API: binary or too large]"
+        print(f"+{f['additions']:<5} -{f['deletions']:<5} {f['status']:<9} {f['filename']}{note}")
+    if reviewable > SPLIT_THRESHOLD:
+        print(f"size: over {SPLIT_THRESHOLD} lines -> split the analysis by area across subagents")
+
+    print("\n## Commits")
+    for c in gh_pages(f"repos/{owner}/{repo}/pulls/{number}/commits?per_page=100"):
+        print(f"{c['sha'][:10]} {c['commit']['message'].splitlines()[0]}")
+
+    print("\n## Checkout")
+    if clone:
+        sha, merge_base = checkout(clone, remote, base, number, head, worktree)
+        print(f"clone      {clone} (remote {remote})")
+        print(f"worktree   {worktree}  (detached at {sha[:10]})")
+        print(f"merge base {merge_base[:10]}")
+        print(f"diff       git -C {worktree} diff {merge_base[:10]}...HEAD -- <path>")
+    else:
+        print(f"no local clone of {owner}/{repo} found; re-run with --repo <path>. "
+              f"Read code with: gh api repos/{owner}/{repo}/contents/<path>?ref={head}")
+
+    reviews = gh_pages(f"repos/{owner}/{repo}/pulls/{number}/reviews?per_page=100")
+    print(f"\n## Existing reviews ({len(reviews)})")
+    for r in reviews:
+        if r["body"] or r["state"] != "COMMENTED":
+            print(f"{r['user']['login']} {r['state']} {r['commit_id'][:7]}: {one_line(r['body']) or '(no body)'}")
+
+    inline = gh_pages(f"repos/{owner}/{repo}/pulls/{number}/comments?per_page=100")
+    print(f"\n## Inline comments ({len(inline)}; do not repeat these)")
+    for c in inline:
+        line = c.get("line") or c.get("original_line")
+        flags = (" reply" if c.get("in_reply_to_id") else "") + ("" if c.get("line") else " outdated")
+        print(f"{c['path']}:{line} {c['user']['login']}{flags}: {one_line(c['body'], 200)}")
+
+    convo = gh_pages(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
+    print(f"\n## Conversation ({len(convo)})")
+    for c in convo:
+        print(f"{c['user']['login']}: {one_line(c['body'], 200)}")
+
+    runs = [r for page in gh_json(["api", f"repos/{owner}/{repo}/commits/{head}/check-runs?per_page=100",
+                                   "--paginate", "--slurp"]) for r in page["check_runs"]]
+    statuses = gh_json(["api", f"repos/{owner}/{repo}/commits/{head}/status"])["statuses"]
+    checks = [f"{r['conclusion'] or r['status']}  {r['name']}" for r in runs]
+    checks += [f"{s['state']}  {s['context']}" for s in statuses]
+    print("\n## Checks")
+    print("\n".join(checks[:30]) or "(none)")
+
+    print("\n## Next")
+    print(f"drafts file  {drafts}{'  (exists)' if os.path.exists(drafts) else ''}")
+    print(f"validate     post-review {url} --dry-run")
+    if clone:
+        print(f"cleanup      gather-pr {url} --cleanup")
+
+
+if __name__ == "__main__":
+    main()
